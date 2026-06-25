@@ -231,6 +231,65 @@ type ChangeInfo struct {
 	UpsertedId interface{}
 }
 
+// UpdateResult is the result of an UpdateOne or UpdateMany operation.
+// It mirrors mongo-driver v1's UpdateResult for easy migration.
+type UpdateResult struct {
+	// MatchedCount is the number of documents matched by the filter.
+	MatchedCount int64
+	// ModifiedCount is the number of documents modified.
+	ModifiedCount int64
+	// UpsertedCount is 1 if an upsert was performed, otherwise 0.
+	UpsertedCount int64
+	// UpsertedID is the _id of the upserted document (nil if no upsert).
+	UpsertedID interface{}
+}
+
+// DeleteResult is the result of a DeleteOne or DeleteMany operation.
+// It mirrors mongo-driver v1's DeleteResult for easy migration.
+type DeleteResult struct {
+	// DeletedCount is the number of documents deleted.
+	DeletedCount int64
+}
+
+// UpdateOptions provides options for UpdateOne / UpdateMany operations.
+// Supports method chaining to match mongo-driver v1 style.
+type UpdateOptions struct {
+	// Upsert specifies whether to insert a new document if no document matches the filter.
+	Upsert bool
+	// ArrayFilters specifies an array of filter documents for arrayFilters update modifier.
+	ArrayFilters []interface{}
+	// Collation specifies a collation to use for the operation.
+	Collation *Collation
+	// Hint specifies an index to use for the operation.
+	Hint interface{}
+	// Comment specifies a comment for the operation.
+	Comment interface{}
+}
+
+// SetUpsert sets whether to perform an upsert and returns the options.
+func (o *UpdateOptions) SetUpsert(upsert bool) *UpdateOptions {
+	o.Upsert = upsert
+	return o
+}
+
+// SetCollation sets the collation for the update and returns the options.
+func (o *UpdateOptions) SetCollation(c *Collation) *UpdateOptions {
+	o.Collation = c
+	return o
+}
+
+// SetHint sets the index hint for the update and returns the options.
+func (o *UpdateOptions) SetHint(hint interface{}) *UpdateOptions {
+	o.Hint = hint
+	return o
+}
+
+// SetArrayFilters sets the array filters for the update and returns the options.
+func (o *UpdateOptions) SetArrayFilters(filters []interface{}) *UpdateOptions {
+	o.ArrayFilters = filters
+	return o
+}
+
 // MapReduce holds the parameters for a map/reduce job.
 type MapReduce struct {
 	Map      string // JavaScript map function

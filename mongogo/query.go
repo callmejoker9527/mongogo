@@ -50,6 +50,15 @@ func (q *Query) Select(selector interface{}) *Query {
 	return q
 }
 
+// SetProjection is an alias for Select, provided for compatibility with
+// mongo-driver v1 style (options.Find().SetProjection(...)).
+//
+//	col.Find(filter).SetProjection(bson.M{"name": 1, "email": 1}).All(&results)
+func (q *Query) SetProjection(projection interface{}) *Query {
+	q.projection = projection
+	return q
+}
+
 // Skip sets the number of documents to skip.
 func (q *Query) Skip(n int) *Query {
 	q.skip = int64(n)

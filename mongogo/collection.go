@@ -139,6 +139,7 @@ func (c *Collection) Insert(docs ...interface{}) error {
 }
 
 // Update modifies the first document that matches the selector.
+// Returns ErrNotFound if no document matches.
 func (c *Collection) Update(selector interface{}, update interface{}) error {
 	ctx, cancel := c.Database.Session.timeoutContext()
 	defer cancel()
@@ -151,6 +152,115 @@ func (c *Collection) Update(selector interface{}, update interface{}) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// UpdateOne modifies the first document that matches the filter and returns a
+// structured UpdateResult (MatchedCount, ModifiedCount, UpsertedCount, UpsertedID).
+// opts is optional; pass an *UpdateOptions to enable upsert, set collation, etc.
+//
+// This mirrors the mongo-driver v1 Collection.UpdateOne signature for easy migration:
+//
+//	result, err := col.UpdateOne(ctx, filter, update)
+//	result, err  = col.UpdateOne(ctx, filter, update, (&mongogo.UpdateOptions{}).SetUpsert(true))
+func (c *Collection) UpdateOne(ctx context.Context, filter interface{}, update interface{}, opts ...*UpdateOptions) (*UpdateResult, error) {
+	driverOpts := options.UpdateOne()
+	if len(opts) > 0 && opts[0] != nil {
+		o := opts[0]
+		if o.Upsert {
+			driverOpts.SetUpsert(true)
+		}
+		if o.Collation != nil {
+			driverOpts.SetCollation(toDriverCollation(o.Collation))
+		}
+		if o.Hint != nil {
+			driverOpts.SetHint(o.Hint)
+		}
+		if o.ArrayFilters != nil {
+			driverOpts.SetArrayFilters(o.ArrayFilters)
+		}
+	}
+
+	res, err := c.internal().UpdateOne(ctx, filter, update, driverOpts)
+	if err != nil {
+		return nil, convertError(err)
+	}
+	ur := &UpdateResult{
+		MatchedCount:  res.MatchedCount,
+		ModifiedCount: res.ModifiedCount,
+	}
+	if res.UpsertedID != nil {
+		ur.UpsertedCount = 1
+		ur.UpsertedID = res.UpsertedID
+	}
+	return ur, nil
+}
+
+// UpdateMany modifies all documents that match the filter and returns a
+// structured UpdateResult (MatchedCount, ModifiedCount, UpsertedCount, UpsertedID).
+// opts is optional; pass an *UpdateOptions to enable upsert, set collation, etc.
+//
+// This mirrors the mongo-driver v1 Collection.UpdateMany signature for easy migration:
+//
+//	result, err := col.UpdateMany(ctx, filter, update)
+func (c *Collection) UpdateMany(ctx context.Context, filter interface{}, update interface{}, opts ...*UpdateOptions) (*UpdateResult, error) {
+	driverOpts := options.UpdateMany()
+	if len(opts) > 0 && opts[0] != nil {
+		o := opts[0]
+		if o.Upsert {
+			driverOpts.SetUpsert(true)
+		}
+		if o.Collation != nil {
+			driverOpts.SetCollation(toDriverCollation(o.Collation))
+		}
+		if o.Hint != nil {
+			driverOpts.SetHint(o.Hint)
+		}
+		if o.ArrayFilters != nil {
+			driverOpts.SetArrayFilters(o.ArrayFilters)
+		}
+	}
+
+	res, err := c.internal().UpdateMany(ctx, filter, update, driverOpts)
+	if err != nil {
+		return nil, convertError(err)
+	}
+	ur := &UpdateResult{
+		MatchedCount:  res.MatchedCount,
+		ModifiedCount: res.ModifiedCount,
+	}
+	if res.UpsertedID != nil {
+		ur.UpsertedCount = 1
+		ur.UpsertedID = res.UpsertedID
+	}
+	return ur, nil
+}
+
+// DeleteOne deletes the first document that matches the filter and returns a
+// DeleteResult containing the number of documents deleted.
+//
+// This mirrors the mongo-driver v1 Collection.DeleteOne signature for easy migration:
+//
+//	result, err := col.DeleteOne(ctx, filter)
+func (c *Collection) DeleteOne(ctx context.Context, filter interface{}) (*DeleteResult, error) {
+	res, err := c.internal().DeleteOne(ctx, filter)
+	if err != nil {
+		return nil, convertError(err)
+	}
+	return &DeleteResult{DeletedCount: res.DeletedCount}, nil
+}
+
+// DeleteMany deletes all documents that match the filter and returns a
+// DeleteResult containing the total number of documents deleted.
+//
+// This mirrors the mongo-driver v1 Collection.DeleteMany signature for easy migration:
+//
+//	result, err := col.DeleteMany(ctx, filter)
+func (c *Collection) DeleteMany(ctx context.Context, filter interface{}) (*DeleteResult, error) {
+	res, err := c.internal().DeleteMany(ctx, filter)
+	if err != nil {
+		return nil, convertError(err)
+	}
+	return &DeleteResult{DeletedCount: res.DeletedCount}, nil
 }
 
 // UpdateId modifies the document with the given id.
