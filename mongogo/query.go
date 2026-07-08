@@ -11,22 +11,23 @@ import (
 
 // Query represents a MongoDB query.
 type Query struct {
-	session    *Session
-	collection *Collection
-	filter     interface{}
-	sort       bson.D
-	projection interface{}
-	hint       interface{}
-	skip       int64
-	limit      int64
-	prefetch   float64
-	maxTime    time.Duration
-	comment    string
-	snapshot   bool
-	batchSize  int32
-	collation  *Collation
+	session         *Session
+	collection      *Collection
+	filter          interface{}
+	sort            bson.D
+	projection      interface{}
+	hint            interface{}
+	skip            int64
+	limit           int64
+	prefetch        float64
+	maxTime         time.Duration
+	comment         string
+	snapshot        bool
+	batchSize       int32
+	collation       *Collation
 	noCursorTimeout bool
 	allowDiskUse    bool
+	autoFn          func(error)
 }
 
 // Sort sets the sort order for the query.
@@ -139,6 +140,9 @@ func (q *Query) Count() (int, error) {
 	}
 
 	n, err := q.collection.internal().CountDocuments(ctx, q.filter, opts)
+	if q.autoFn != nil {
+		q.autoFn(err)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -155,9 +159,15 @@ func (q *Query) One(result interface{}) error {
 	err := q.collection.internal().FindOne(ctx, q.filter, opts).Decode(result)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return ErrNotFound
+			err = ErrNotFound
+		}
+		if q.autoFn != nil {
+			q.autoFn(err)
 		}
 		return err
+	}
+	if q.autoFn != nil {
+		q.autoFn(nil)
 	}
 	return nil
 }
@@ -170,10 +180,106 @@ func (q *Query) All(result interface{}) error {
 	opts := q.buildFindOptions()
 	cursor, err := q.collection.internal().Find(ctx, q.filter, opts)
 	if err != nil {
+		if q.autoFn != nil {
+			q.autoFn(err)
+		}
 		return err
 	}
 	defer cursor.Close(ctx) //nolint
-	return cursor.All(ctx, result)
+	err = cursor.All(ctx, result)
+	if q.autoFn != nil {
+		q.autoFn(err)
+	}
+	return err
+}
+
+// Json executes the query and returns all matching documents as a standard
+// JSON-formatted string (array of objects). If no documents match, it returns
+// an empty JSON array "[]". The AutoFn callback (if set) is invoked with the
+// resulting error.
+//
+// Example:
+//
+//	json, err := col.Find(filter).Sort("-created_at").Limit(10).Json()
+func (q *Query) Json() (string, error) {
+	ctx, cancel := q.session.timeoutContext()
+	defer cancel()
+
+	opts := q.buildFindOptions()
+	cursor, err := q.collection.internal().Find(ctx, q.filter, opts)
+	if err != nil {
+		if q.autoFn != nil {
+			q.autoFn(err)
+		}
+		return "", err
+	}
+	defer cursor.Close(ctx) //nolint
+
+	// Decode into []bson.M so that ObjectIDs, dates, etc. are preserved
+	var docs []bson.M
+	if err = cursor.All(ctx, &docs); err != nil {
+		if q.autoFn != nil {
+			q.autoFn(err)
+		}
+		return "", err
+	}
+	if docs == nil {
+		docs = []bson.M{}
+	}
+
+	// bson.MarshalExtJSON produces standard JSON, converting BSON types
+	// (ObjectID → {"$oid":"..."}, Date → {"$date":...}, etc.) appropriately.
+	// Use relaxed mode (canonical=false) so numbers stay as plain JSON numbers.
+	raw, err := bson.MarshalExtJSON(docs, false, false)
+	if err != nil {
+		if q.autoFn != nil {
+			q.autoFn(err)
+		}
+		return "", err
+	}
+	result := string(raw)
+	if q.autoFn != nil {
+		q.autoFn(nil)
+	}
+	return result, nil
+}
+
+// JsonOne executes the query and returns the first matching document as a
+// standard JSON-formatted string (object). Returns ErrNotFound if no document
+// matches. The AutoFn callback (if set) is invoked with the resulting error.
+//
+// Example:
+//
+//	json, err := col.Find(filter).JsonOne()
+func (q *Query) JsonOne() (string, error) {
+	ctx, cancel := q.session.timeoutContext()
+	defer cancel()
+
+	opts := q.buildFindOneOptions()
+	var doc bson.M
+	err := q.collection.internal().FindOne(ctx, q.filter, opts).Decode(&doc)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			err = ErrNotFound
+		}
+		if q.autoFn != nil {
+			q.autoFn(err)
+		}
+		return "", err
+	}
+
+	raw, err := bson.MarshalExtJSON(doc, false, false)
+	if err != nil {
+		if q.autoFn != nil {
+			q.autoFn(err)
+		}
+		return "", err
+	}
+	result := string(raw)
+	if q.autoFn != nil {
+		q.autoFn(nil)
+	}
+	return result, nil
 }
 
 // Distinct returns a list of unique values for the given field.
@@ -189,9 +295,16 @@ func (q *Query) Distinct(key string, result interface{}) error {
 	// In driver v2, Distinct returns *DistinctResult
 	dr := q.collection.internal().Distinct(ctx, key, q.filter, opts)
 	if err := dr.Err(); err != nil {
+		if q.autoFn != nil {
+			q.autoFn(err)
+		}
 		return err
 	}
-	return dr.Decode(result)
+	err := dr.Decode(result)
+	if q.autoFn != nil {
+		q.autoFn(err)
+	}
+	return err
 }
 
 // Iter returns a cursor iterator for the query results.
@@ -235,10 +348,10 @@ func (q *Query) Apply(change Change, result interface{}) (*ChangeInfo, error) {
 		if q.projection != nil {
 			opts.SetProjection(q.projection)
 		}
-	if q.collation != nil {
-		opts.SetCollation(toDriverCollation(q.collation))
-	}
-	err := q.collection.internal().FindOneAndDelete(ctx, q.filter, opts).Decode(result)
+		if q.collation != nil {
+			opts.SetCollation(toDriverCollation(q.collation))
+		}
+		err := q.collection.internal().FindOneAndDelete(ctx, q.filter, opts).Decode(result)
 		if err != nil {
 			if err == mongo.ErrNoDocuments {
 				return info, ErrNotFound
@@ -368,6 +481,22 @@ func (q *Query) AllowDiskUse() *Query {
 	return q
 }
 
+// Auto registers a callback function that is automatically invoked after
+// the query's terminal operation (All, One, Count, Distinct) completes.
+// The callback receives the error returned by the terminal operation.
+//
+// This enables a convenient hook pattern:
+//
+//	col.Find(filter).Auto(func(err error) {
+//	    if err != nil {
+//	        log.Println("query failed:", err)
+//	    }
+//	}).All(&results)
+func (q *Query) Auto(fn func(error)) *Query {
+	q.autoFn = fn
+	return q
+}
+
 // Explain returns the query execution plan.
 // verbosity can be "queryPlanner", "executionStats" (default), or "allPlansExecution".
 func (q *Query) Explain(result interface{}) error {
@@ -465,4 +594,3 @@ func (q *Query) buildFindOptions() *options.FindOptionsBuilder {
 	}
 	return opts
 }
-
